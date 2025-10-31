@@ -50,4 +50,4 @@ In Azure DevOps, set the following secrets in your Variable Group:
 
 ## 📊 Architecture Diagram
 
-![Architecture](diagram.png)
+![Architecture](architecture-diagram.png)
