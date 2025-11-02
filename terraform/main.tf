@@ -1,145 +1,114 @@
+terraform {
+  required_version = ">= 1.5.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.10"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.30"
+    }
+  }
+}
+
 provider "aws" {
-  region = var.region
+  region = var.aws_region
+}
+
+data "aws_eks_cluster" "cluster" {
+  name = module.eks.cluster_name
+  depends_on = [module.eks]
+}
+
+data "aws_eks_cluster_auth" "cluster" {
+  name = module.eks.cluster_name
+  depends_on = [module.eks]
+}
+
+provider "kubernetes" {
+  host                   = data.aws_eks_cluster.cluster.endpoint
+  cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data)
+  token                  = data.aws_eks_cluster_auth.cluster.token
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = data.aws_eks_cluster.cluster.endpoint
+    cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data)
+    token                  = data.aws_eks_cluster_auth.cluster.token
+  }
 }
 
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "3.18.1"
+  version = "~> 5.0"
 
-  name = "app-vpc"
+  name = "observability-vpc"
   cidr = "10.0.0.0/16"
 
-  azs             = ["${var.region}a", "${var.region}b"]
+  azs             = ["${var.aws_region}a", "${var.aws_region}b"]
   public_subnets  = ["10.0.1.0/24", "10.0.2.0/24"]
-  enable_dns_hostnames = true
+  private_subnets = ["10.0.3.0/24", "10.0.4.0/24"]
 
-  tags = {
-    Name = "aws-cloud-vpc"
+  enable_nat_gateway = true
+  enable_dns_hostnames = true
+}
+
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "~> 20.0"
+
+  cluster_name    = var.cluster_name
+  cluster_version = "1.30"
+  cluster_endpoint_public_access = true
+
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnets
+
+  eks_managed_node_groups = {
+    default = {
+      instance_types = ["t3.medium"]
+      min_size       = 1
+      max_size       = 3
+      desired_size   = 2
+    }
   }
 }
 
-resource "aws_ecs_cluster" "main" {
-  name = "aws-cloud-cluster"
-}
-
-resource "aws_ecr_repository" "app" {
-  name = "my-aws-app"
-}
-
-resource "aws_iam_role" "ecs_task_execution_role" {
-  name = "ecsTaskExecutionRole"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Action = "sts:AssumeRole",
-      Effect = "Allow",
-      Principal = {
-        Service = "ecs-tasks.amazonaws.com"
-      }
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "ecs_task_execution_policy" {
-  role       = aws_iam_role.ecs_task_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-resource "aws_cloudwatch_log_group" "app" {
-  name              = "/ecs/aws-cloud-app"
-  retention_in_days = 7
-}
-
-#resource "aws_opensearch_domain" "app_logs" {
-#  domain_name = "aws-cloud-app-logs"
-
-#  cluster_config {
-#    instance_type = "t3.small.search"
-#  }
-
-#  ebs_options {
-#    ebs_enabled = true
-#    volume_size = 10
-#  }
-
-#  engine_version = "OpenSearch_1.3"
-
-#  access_policies = jsonencode({
-#    Version = "2012-10-17",
-#    Statement = [{
-#      Effect = "Allow",
-#      Principal = "*",
-#      Action = "es:*",
-#      Resource = "arn:aws:es:${var.region}:*:domain/aws-cloud-app-logs/*"
-#    }]
-#})
-
-#  advanced_options = {
-#    "rest.action.multi.allow_explicit_index" = "true"
-#  }
+#module "alb" {
+#  source  = "terraform-aws-modules/alb/aws"
+#  version = "~> 8.0"  
 #}
 
-resource "aws_ecs_task_definition" "app" {
-  family                   = "aws-cloud-task"
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  cpu                      = "256"
-  memory                   = "512"
-  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+#module "observability" {
+#  source  = "./modules/observability" # Assuming a local path  
+#}
 
-  container_definitions = jsonencode([
-    {
-      name      = "app"
-      image     = "${aws_ecr_repository.app.repository_url}:latest"
-      essential = true
-      portMappings = [{
-        containerPort = 3000
-        hostPort      = 3000
-      }]
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          awslogs-group         = aws_cloudwatch_log_group.app.name
-          awslogs-region        = var.region
-          awslogs-stream-prefix = "app"
-        }
-      }
-    }
-  ])
+# --- Application Modules ---
+
+module "monitoring" {
+  source           = "./modules/monitoring"
+  helm_values_path = path.module
+
+  depends_on = [module.eks]
 }
 
-resource "aws_security_group" "ecs_service_sg" {
-  name        = "ecs_service_sg"
-  vpc_id      = module.vpc.vpc_id
+module "gitops" {
+  source           = "./modules/gitops"
+  helm_values_path = path.module
 
-  ingress {
-    from_port   = 3000
-    to_port     = 3000
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  depends_on = [module.eks]
 }
 
-resource "aws_ecs_service" "app" {
-  name            = "aws-cloud-service"
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.app.arn
-  launch_type     = "FARGATE"
-  desired_count   = 1
+module "service_mesh" {
+  source           = "./modules/service_mesh"
+  helm_values_path = path.module
 
-  network_configuration {
-    subnets         = module.vpc.public_subnets
-    security_groups = [aws_security_group.ecs_service_sg.id]
-    assign_public_ip = true
-  }
-
-  depends_on = [aws_iam_role_policy_attachment.ecs_task_execution_policy]
+  depends_on = [module.eks]
 }
+

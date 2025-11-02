@@ -1,0 +1,3 @@
+prometheus:
+  retention: 7d
+  scrapeInterval: 15s

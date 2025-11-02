@@ -6,7 +6,7 @@ node_modules
 .terraform/             # This should catch everything inside .terraform/
 *.tfstate
 *.tfstate.*
-.terraform.lock.hcl
+# .terraform.lock.hcl
 crash.log
 override.tf
 override.tf.json
@@ -18,7 +18,7 @@ override.tf.json
 terraform/.terraform/
 terraform/*.tfstate
 terraform/*.tfstate.*
-terraform/.terraform.lock.hcl
+# terraform/.terraform.lock.hcl
 terraform/crash.log
 terraform/override.tf
 terraform/override.tf.json
