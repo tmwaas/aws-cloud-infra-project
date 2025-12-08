@@ -1,6 +1,6 @@
 # AWS Cloud Project
 
-This is a full-stack cloud infrastructure deployment project deployed on AWS Cloud.
+This is a full-stack cloud infrastructure deployment project deployed on AWS Cloud
 
 ## ✅ Project Features
 
